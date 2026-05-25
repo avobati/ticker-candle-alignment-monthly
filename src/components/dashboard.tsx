@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Search, Download, ExternalLink } from "lucide-react";
 import type { TickerRow, Alignment, Market } from "@/data/mock-data";
 
@@ -63,6 +63,8 @@ function AlignmentBadge({ status }: { status: Alignment }) {
 }
 
 export function Dashboard({ initialData }: { initialData: TickerRow[] }) {
+  const [data, setData] = useState<TickerRow[]>(initialData);
+  const [loading, setLoading] = useState(initialData.length === 0);
   const [searchInput, setSearchInput] = useState("");
   const [tableFilterTicker, setTableFilterTicker] = useState("");
   const [marketFilter, setMarketFilter] = useState<string>("ALL");
@@ -75,8 +77,19 @@ export function Dashboard({ initialData }: { initialData: TickerRow[] }) {
   const [tableFilterMaxCandles, setTableFilterMaxCandles] = useState("");
   const [alignmentFilter, setAlignmentFilter] = useState<string>("ALL");
 
+  useEffect(() => {
+    if (initialData.length > 0) return;
+    fetch("/api/data?limit=20000")
+      .then((r) => r.json())
+      .then((json) => {
+        if (json.rows) setData(json.rows);
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [initialData]);
+
   const filtered = useMemo(() => {
-    let rows = initialData;
+    let rows = data;
 
     if (tableFilterTicker.trim()) {
       const q = tableFilterTicker.trim().toUpperCase();
@@ -101,7 +114,7 @@ export function Dashboard({ initialData }: { initialData: TickerRow[] }) {
       rows = rows.filter((r) => r.status === alignmentFilter);
     }
     return rows;
-  }, [initialData, tableFilterTicker, tableFilterMarket, tableFilterWeekly, tableFilterMonthly, tableFilterMaxCandles, alignmentFilter]);
+  }, [data, tableFilterTicker, tableFilterMarket, tableFilterWeekly, tableFilterMonthly, tableFilterMaxCandles, alignmentFilter]);
 
   const stats = useMemo(() => ({
     total: filtered.length,
@@ -150,7 +163,7 @@ export function Dashboard({ initialData }: { initialData: TickerRow[] }) {
                 }}
               >
                 <p className={`text-sm ${card.textColor ?? "text-slate-400"}`}>{card.label}</p>
-                <p className="mt-1 font-mono text-2xl text-white">{card.value.toLocaleString()}</p>
+                <p className="mt-1 font-mono text-2xl text-white">{loading ? "-" : card.value.toLocaleString()}</p>
               </button>
             ))}
           </div>
@@ -158,7 +171,9 @@ export function Dashboard({ initialData }: { initialData: TickerRow[] }) {
           <div className="grid gap-3 border-b border-white/10 px-4 py-4 lg:grid-cols-[1fr_minmax(24rem,32rem)] lg:items-end">
             <div>
               <h2 className="text-xl font-semibold text-white">Alignment Board</h2>
-              <p className="mt-1 text-sm text-slate-400">{initialData.length.toLocaleString()} matching names · rendering {filtered.length} visible rows</p>
+              <p className="mt-1 text-sm text-slate-400">
+                {loading ? "Loading..." : `${data.length.toLocaleString()} matching names · rendering ${filtered.length} visible rows`}
+              </p>
             </div>
             <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); setTableFilterTicker(searchInput); }}>
               <div className="flex gap-2">
@@ -173,7 +188,7 @@ export function Dashboard({ initialData }: { initialData: TickerRow[] }) {
 
           <div className="flex flex-col gap-4 border-b border-white/10 px-4 py-4 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap items-center gap-2 text-sm text-slate-400">
-              <span>{initialData.length.toLocaleString()} total names</span>
+              <span>{loading ? "-" : data.length.toLocaleString()} total names</span>
               <a className="inline-flex h-9 items-center gap-2 rounded border border-white/10 bg-white/[0.03] px-3 text-xs font-medium text-slate-200 transition hover:border-cyan-300/40 hover:text-cyan-100" href="/api/export?format=csv"><Download className="h-3.5 w-3.5" />CSV</a>
               <a className="inline-flex h-9 items-center gap-2 rounded border border-white/10 bg-white/[0.03] px-3 text-xs font-medium text-slate-200 transition hover:border-cyan-300/40 hover:text-cyan-100" href="/api/export?format=xlsx"><Download className="h-3.5 w-3.5" />Excel</a>
             </div>
@@ -217,55 +232,59 @@ export function Dashboard({ initialData }: { initialData: TickerRow[] }) {
           </div>
 
           <div className="max-h-[72vh] overflow-auto" style={{ overflowAnchor: "none" }}>
-            <table className="w-full min-w-[1180px] table-fixed border-collapse text-left text-xs">
-              <colgroup>
-                <col className="w-[9%]" /><col className="w-[13%]" /><col className="w-[8%]" /><col className="w-[9%]" />
-                <col className="w-[7%]" /><col className="w-[5%]" /><col className="w-[8%]" /><col className="w-[8%]" />
-                <col className="w-[7%]" /><col className="w-[5%]" /><col className="w-[8%]" /><col className="w-[8%]" /><col className="w-[5%]" />
-              </colgroup>
-              <thead className="sticky top-0 z-10 bg-[#14171c] text-[11px] uppercase tracking-normal text-slate-400 shadow-[0_1px_0_rgba(255,255,255,0.1)]">
-                <tr>
-                  <th className="px-2 py-2" rowSpan={2}>Ticker</th>
-                  <th className="px-2 py-2" rowSpan={2}>Name</th>
-                  <th className="px-2 py-2" rowSpan={2}>Market</th>
-                  <th className="px-2 py-2" rowSpan={2}>Alignment</th>
-                  <th className="border-l border-white/10 px-2 py-2 text-center text-cyan-200" colSpan={4}>Weekly</th>
-                  <th className="border-l border-white/10 px-2 py-2 text-center text-violet-200" colSpan={4}>Monthly</th>
-                  <th className="border-l border-white/10 px-2 py-2 text-right" rowSpan={2}>Chart</th>
-                </tr>
-                <tr>
-                  <th className="border-l border-white/10 px-2 py-2">Signal</th>
-                  <th className="px-2 py-2 text-right">Ago</th>
-                  <th className="px-2 py-2 text-right">Signal Px</th>
-                  <th className="px-2 py-2 text-right">Current</th>
-                  <th className="border-l border-white/10 px-2 py-2">Signal</th>
-                  <th className="px-2 py-2 text-right">Ago</th>
-                  <th className="px-2 py-2 text-right">Signal Px</th>
-                  <th className="px-2 py-2 text-right">Current</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((row) => (
-                  <tr key={`${row.symbol}-${row.weekly.scannedAt}-${row.monthly.scannedAt}`} className="border-t border-white/10 transition hover:bg-white/[0.025]">
-                    <td className="truncate px-2 py-3 font-mono font-semibold text-cyan-200" title={row.ticker}>{row.ticker}</td>
-                    <td className="truncate px-2 py-3 text-slate-200" title={row.symbolName}>{row.symbolName}</td>
-                    <td className="truncate px-2 py-3 text-slate-400">{row.market}</td>
-                    <td className="px-2 py-3"><AlignmentBadge status={row.status} /></td>
-                    <td className="border-l border-white/10 px-2 py-3"><SignalBadge signal={row.weekly.signal} /><p className="mt-1 truncate font-mono text-[10px] text-slate-600">{formatDate(row.weekly.scannedAt)}</p></td>
-                    <td className="px-2 py-3 text-right font-mono text-slate-200">{row.weekly.candlesAgo}</td>
-                    <td className="px-2 py-3 text-right font-mono text-slate-200">{formatPrice(row.weekly.signalPrice)}</td>
-                    <td className="px-2 py-3 text-right font-mono text-white">{formatPrice(row.weekly.currentPrice)}</td>
-                    <td className="border-l border-white/10 px-2 py-3"><SignalBadge signal={row.monthly.signal} /><p className="mt-1 truncate font-mono text-[10px] text-slate-600">{formatDate(row.monthly.scannedAt)}</p></td>
-                    <td className="px-2 py-3 text-right font-mono text-slate-200">{row.monthly.candlesAgo}</td>
-                    <td className="px-2 py-3 text-right font-mono text-slate-200">{formatPrice(row.monthly.signalPrice)}</td>
-                    <td className="px-2 py-3 text-right font-mono text-white">{formatPrice(row.monthly.currentPrice)}</td>
-                    <td className="border-l border-white/10 px-2 py-3 text-right">
-                      <a aria-label={`Open ${row.ticker} on TradingView`} className="inline-flex h-8 w-8 items-center justify-center rounded border border-cyan-300/30 text-cyan-200 transition hover:border-cyan-200 hover:bg-cyan-300/10" href={`https://www.tradingview.com/chart/?symbol=${row.ticker}`} rel="noreferrer" target="_blank"><ExternalLink className="h-4 w-4" /></a>
-                    </td>
+            {loading ? (
+              <div className="flex items-center justify-center py-20 text-slate-400">Loading data from Neon...</div>
+            ) : (
+              <table className="w-full min-w-[1180px] table-fixed border-collapse text-left text-xs">
+                <colgroup>
+                  <col className="w-[9%]" /><col className="w-[13%]" /><col className="w-[8%]" /><col className="w-[9%]" />
+                  <col className="w-[7%]" /><col className="w-[5%]" /><col className="w-[8%]" /><col className="w-[8%]" />
+                  <col className="w-[7%]" /><col className="w-[5%]" /><col className="w-[8%]" /><col className="w-[8%]" /><col className="w-[5%]" />
+                </colgroup>
+                <thead className="sticky top-0 z-10 bg-[#14171c] text-[11px] uppercase tracking-normal text-slate-400 shadow-[0_1px_0_rgba(255,255,255,0.1)]">
+                  <tr>
+                    <th className="px-2 py-2" rowSpan={2}>Ticker</th>
+                    <th className="px-2 py-2" rowSpan={2}>Name</th>
+                    <th className="px-2 py-2" rowSpan={2}>Market</th>
+                    <th className="px-2 py-2" rowSpan={2}>Alignment</th>
+                    <th className="border-l border-white/10 px-2 py-2 text-center text-cyan-200" colSpan={4}>Weekly</th>
+                    <th className="border-l border-white/10 px-2 py-2 text-center text-violet-200" colSpan={4}>Monthly</th>
+                    <th className="border-l border-white/10 px-2 py-2 text-right" rowSpan={2}>Chart</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                  <tr>
+                    <th className="border-l border-white/10 px-2 py-2">Signal</th>
+                    <th className="px-2 py-2 text-right">Ago</th>
+                    <th className="px-2 py-2 text-right">Signal Px</th>
+                    <th className="px-2 py-2 text-right">Current</th>
+                    <th className="border-l border-white/10 px-2 py-2">Signal</th>
+                    <th className="px-2 py-2 text-right">Ago</th>
+                    <th className="px-2 py-2 text-right">Signal Px</th>
+                    <th className="px-2 py-2 text-right">Current</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((row) => (
+                    <tr key={`${row.symbol}-${row.weekly.scannedAt}-${row.monthly.scannedAt}`} className="border-t border-white/10 transition hover:bg-white/[0.025]">
+                      <td className="truncate px-2 py-3 font-mono font-semibold text-cyan-200" title={row.ticker}>{row.ticker}</td>
+                      <td className="truncate px-2 py-3 text-slate-200" title={row.symbolName}>{row.symbolName}</td>
+                      <td className="truncate px-2 py-3 text-slate-400">{row.market}</td>
+                      <td className="px-2 py-3"><AlignmentBadge status={row.status} /></td>
+                      <td className="border-l border-white/10 px-2 py-3"><SignalBadge signal={row.weekly.signal} /><p className="mt-1 truncate font-mono text-[10px] text-slate-600">{formatDate(row.weekly.scannedAt)}</p></td>
+                      <td className="px-2 py-3 text-right font-mono text-slate-200">{row.weekly.candlesAgo}</td>
+                      <td className="px-2 py-3 text-right font-mono text-slate-200">{formatPrice(row.weekly.signalPrice)}</td>
+                      <td className="px-2 py-3 text-right font-mono text-white">{formatPrice(row.weekly.currentPrice)}</td>
+                      <td className="border-l border-white/10 px-2 py-3"><SignalBadge signal={row.monthly.signal} /><p className="mt-1 truncate font-mono text-[10px] text-slate-600">{formatDate(row.monthly.scannedAt)}</p></td>
+                      <td className="px-2 py-3 text-right font-mono text-slate-200">{row.monthly.candlesAgo}</td>
+                      <td className="px-2 py-3 text-right font-mono text-slate-200">{formatPrice(row.monthly.signalPrice)}</td>
+                      <td className="px-2 py-3 text-right font-mono text-white">{formatPrice(row.monthly.currentPrice)}</td>
+                      <td className="border-l border-white/10 px-2 py-3 text-right">
+                        <a aria-label={`Open ${row.ticker} on TradingView`} className="inline-flex h-8 w-8 items-center justify-center rounded border border-cyan-300/30 text-cyan-200 transition hover:border-cyan-200 hover:bg-cyan-300/10" href={`https://www.tradingview.com/chart/?symbol=${row.ticker}`} rel="noreferrer" target="_blank"><ExternalLink className="h-4 w-4" /></a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </section>
       </div>
