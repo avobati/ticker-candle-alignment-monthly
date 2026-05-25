@@ -7,6 +7,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:seed": "node scripts/seed.mjs",
+    "scan": "python scripts/scan_signals.py --workers 12",
+    "scan:sample": "python scripts/scan_signals.py --limit 40 --workers 8",
     "test": "node --experimental-strip-types --test src/lib/*.test.mts",
     "lint": "eslint"
   },

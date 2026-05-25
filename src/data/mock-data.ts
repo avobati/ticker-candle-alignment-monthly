@@ -1,25 +1,14 @@
 ﻿export type Signal = "BUY" | "NEUTRAL" | "SELL";
 export type Alignment = "Aligned BUY" | "Weekly BUY, Monthly Neutral" | "Conflict" | "Avoid";
-export type Market =
-  | "Basic Materials"
-  | "Communication Services"
-  | "Consumer Cyclical"
-  | "Consumer Defensive"
-  | "Energy"
-  | "Financial"
-  | "Healthcare"
-  | "Industrials"
-  | "Real Estate"
-  | "Technology"
-  | "Utilities";
+export type Market = string;
 
 export interface TimeframeData {
   timeframe: "weekly" | "monthly";
   signal: Signal;
-  candlesAgo: number;
-  signalPrice: number;
-  currentPrice: number;
-  scannedAt: string;
+  candlesAgo: number | null;
+  signalPrice: number | null;
+  currentPrice: number | null;
+  scannedAt: string | null;
 }
 
 export interface TickerRow {

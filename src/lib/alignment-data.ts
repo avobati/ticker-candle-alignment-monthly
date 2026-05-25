@@ -95,7 +95,9 @@ export function filterTickerRows(rows: readonly TickerRow[], filters: TickerFilt
     if (weekly !== "ALL" && row.weekly.signal !== weekly) return false;
     if (monthly !== "ALL" && row.monthly.signal !== monthly) return false;
     if (maxCandles != null && Number.isFinite(maxCandles) && maxCandles > 0) {
-      if (row.weekly.candlesAgo > maxCandles && row.monthly.candlesAgo > maxCandles) return false;
+      const weeklyAgo = row.weekly.candlesAgo ?? Number.MAX_SAFE_INTEGER;
+      const monthlyAgo = row.monthly.candlesAgo ?? Number.MAX_SAFE_INTEGER;
+      if (weeklyAgo > maxCandles && monthlyAgo > maxCandles) return false;
     }
     if (!query) return true;
     return `${row.symbol} ${row.ticker} ${row.symbolName} ${row.market}`.toLowerCase().includes(query);

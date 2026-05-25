@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Download, ExternalLink, Search, X } from "lucide-react";
 import { countAlignmentStats, filterTickerRows } from "@/lib/alignment-data";
+import { tradingViewUrl } from "@/lib/market";
 import type { Alignment, Signal, TickerRow } from "@/data/mock-data";
 
 type SignalFilter = Signal | "ALL";
@@ -14,8 +15,8 @@ const signalOptions: SignalFilter[] = ["ALL", "BUY", "NEUTRAL", "SELL"];
 const rowHeight = 66;
 const overscan = 12;
 
-function formatPrice(value: number): string {
-  if (!Number.isFinite(value)) return "-";
+function formatPrice(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "-";
   if (Math.abs(value) >= 1000) return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
   if (Math.abs(value) >= 1) return value.toLocaleString("en-US", { maximumFractionDigits: 4 });
   return value.toLocaleString("en-US", { maximumFractionDigits: 8 });
@@ -32,10 +33,6 @@ function formatDate(iso: string | null): string {
     hour12: true,
     timeZone: "America/New_York",
   }).format(new Date(iso));
-}
-
-function tradingViewUrl(symbol: string) {
-  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}`;
 }
 
 function statusLabel(status: Alignment) {
@@ -313,14 +310,14 @@ export function Dashboard({ generatedAt, initialData }: { generatedAt: string | 
                       <span className={`inline-flex h-6 w-full items-center justify-center rounded px-2 font-mono text-[11px] ${signalClass(row.weekly.signal)}`}>{row.weekly.signal}</span>
                       <p className="mt-1 truncate font-mono text-[10px] text-slate-600">{formatDate(row.weekly.scannedAt)}</p>
                     </td>
-                    <td className="px-2 py-3 text-right font-mono text-slate-200">{row.weekly.candlesAgo}</td>
+                    <td className="px-2 py-3 text-right font-mono text-slate-200">{row.weekly.candlesAgo ?? "-"}</td>
                     <td className="px-2 py-3 text-right font-mono text-slate-200">{formatPrice(row.weekly.signalPrice)}</td>
                     <td className="px-2 py-3 text-right font-mono text-white">{formatPrice(row.weekly.currentPrice)}</td>
                     <td className="border-l border-white/10 px-2 py-3">
                       <span className={`inline-flex h-6 w-full items-center justify-center rounded px-2 font-mono text-[11px] ${signalClass(row.monthly.signal)}`}>{row.monthly.signal}</span>
                       <p className="mt-1 truncate font-mono text-[10px] text-slate-600">{formatDate(row.monthly.scannedAt)}</p>
                     </td>
-                    <td className="px-2 py-3 text-right font-mono text-slate-200">{row.monthly.candlesAgo}</td>
+                    <td className="px-2 py-3 text-right font-mono text-slate-200">{row.monthly.candlesAgo ?? "-"}</td>
                     <td className="px-2 py-3 text-right font-mono text-slate-200">{formatPrice(row.monthly.signalPrice)}</td>
                     <td className="px-2 py-3 text-right font-mono text-white">{formatPrice(row.monthly.currentPrice)}</td>
                     <td className="border-l border-white/10 px-2 py-3 text-right">

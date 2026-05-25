@@ -1,0 +1,11 @@
+{
+  "indicator": "ut-bot-alerts",
+  "provider": "QuantNomad",
+  "key_value": 2,
+  "atr_period": 6,
+  "timeframes": ["weekly", "monthly"],
+  "lookback_candles": {
+    "weekly": 24,
+    "monthly": 6
+  }
+}
