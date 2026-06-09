@@ -6,6 +6,7 @@ import { countAlignmentStats, dedupeTickerRows, filterTickerRows, latestGenerate
 import {
   datasetSourceFor,
   expectedTimeframeRows,
+  hasCompleteRunRows,
   type DatasetSource,
 } from "@/lib/db-run-selection";
 import { getAlignmentStatus, normalizeTicker, shortSymbol } from "@/lib/market";
@@ -31,12 +32,6 @@ type DbSignalRow = {
   signal_price: number | string | null;
   candles_ago: number | null;
   scanned_at: string | Date | null;
-};
-
-type CompleteRunRow = {
-  scanned_at: string | Date;
-  symbol_count: number | string;
-  timeframe_row_count: number | string;
 };
 
 export type AlignmentQuery = {
@@ -185,45 +180,45 @@ export async function getAlignmentRows(query: AlignmentQuery = {}) {
   try {
     const expectedSymbols = universeSymbols.length;
     const expectedRows = expectedTimeframeRows(expectedSymbols);
-    const completeRuns = (await sql`
+    const coherentRows = (await sql`
       WITH recent_timestamps AS (
         SELECT DISTINCT scanned_at
         FROM signal_snapshots
         ORDER BY scanned_at DESC
         LIMIT 100
+      ),
+      complete_run AS (
+        SELECT
+          snapshots.scanned_at
+        FROM signal_snapshots AS snapshots
+        INNER JOIN recent_timestamps
+          ON recent_timestamps.scanned_at = snapshots.scanned_at
+        WHERE snapshots.timeframe IN ('weekly', 'monthly')
+        GROUP BY snapshots.scanned_at
+        HAVING count(distinct snapshots.symbol) = ${expectedSymbols}
+          AND count(*) = ${expectedRows}
+        ORDER BY snapshots.scanned_at DESC
+        LIMIT 1
       )
       SELECT
-        snapshots.scanned_at,
-        count(distinct snapshots.symbol)::integer AS symbol_count,
-        count(*)::integer AS timeframe_row_count
+        snapshots.symbol,
+        snapshots.symbol_name,
+        snapshots.market,
+        snapshots.timeframe,
+        snapshots.signal,
+        snapshots.price,
+        snapshots.signal_price,
+        snapshots.candles_ago,
+        snapshots.scanned_at
       FROM signal_snapshots AS snapshots
-      INNER JOIN recent_timestamps
-        ON recent_timestamps.scanned_at = snapshots.scanned_at
+      INNER JOIN complete_run
+        ON complete_run.scanned_at = snapshots.scanned_at
       WHERE snapshots.timeframe IN ('weekly', 'monthly')
-      GROUP BY snapshots.scanned_at
-      HAVING count(distinct snapshots.symbol) = ${expectedSymbols}
-        AND count(*) = ${expectedRows}
-      ORDER BY snapshots.scanned_at DESC
-      LIMIT 1
-    `) as CompleteRunRow[];
-    const completeRun = completeRuns[0] ?? null;
-    const dbRows = completeRun
-      ? ((await sql`
-          SELECT
-            symbol,
-            symbol_name,
-            market,
-            timeframe,
-            signal,
-            price,
-            signal_price,
-            candles_ago,
-            scanned_at
-          FROM signal_snapshots
-          WHERE timeframe IN ('weekly', 'monthly')
-            AND scanned_at = ${completeRun.scanned_at}
-          ORDER BY symbol, timeframe
-        `) as DbSignalRow[])
+      ORDER BY snapshots.symbol, snapshots.timeframe
+    `) as DbSignalRow[];
+    const completeRunFound = hasCompleteRunRows(coherentRows.length, expectedSymbols);
+    const dbRows = completeRunFound
+      ? coherentRows
       : ((await sql`
           SELECT DISTINCT ON (symbol, timeframe)
             symbol,
@@ -241,8 +236,8 @@ export async function getAlignmentRows(query: AlignmentQuery = {}) {
         `) as DbSignalRow[]);
 
     normalizedRows = normalizeDbRows(dbRows);
-    generatedAt = completeRun ? toIso(completeRun.scanned_at) : latestGeneratedAt(normalizedRows);
-    datasetSource = datasetSourceFor({ completeRunFound: Boolean(completeRun), fallbackUsed: false });
+    generatedAt = latestGeneratedAt(normalizedRows);
+    datasetSource = datasetSourceFor({ completeRunFound, fallbackUsed: false });
   } catch {
     const fallback = fallbackRows();
     normalizedRows = fallback.rows;

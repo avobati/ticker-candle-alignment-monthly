@@ -4,6 +4,10 @@ export function expectedTimeframeRows(universeSize: number) {
   return universeSize * 2;
 }
 
+export function hasCompleteRunRows(rowCount: number, universeSize: number) {
+  return rowCount === expectedTimeframeRows(universeSize);
+}
+
 export function datasetSourceFor({
   completeRunFound,
   fallbackUsed,
