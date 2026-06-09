@@ -40,6 +40,11 @@ recovery. A concurrency group prevents overlapping refreshes.
 Vercel remains the read-only application host. It reads the latest successful
 dataset from Neon and does not execute the long-running scan.
 
+Because GitHub disables scheduled workflows in public repositories after 60
+days without repository activity, the workflow creates an empty maintenance
+commit on the first UTC day of each month. This keeps the schedule active
+without committing generated market data or requiring the user's laptop.
+
 ## Candle Semantics
 
 Yahoo daily data is aggregated into ISO weeks. The final aggregate is the
@@ -100,6 +105,8 @@ credentials are committed or included in logs.
   so the issue is visible in GitHub Actions.
 - Scheduled-run delay: the job starts when a runner becomes available; manual
   dispatch remains available.
+- Public-repository inactivity: a monthly empty maintenance commit prevents
+  GitHub from disabling the scheduled workflow after 60 inactive days.
 - Overlapping run: the existing refresh is allowed to finish and a duplicate
   run does not start concurrently.
 
