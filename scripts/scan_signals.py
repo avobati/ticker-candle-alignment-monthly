@@ -18,6 +18,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 
 
+class ScanValidationError(RuntimeError):
+    pass
+
+
 @dataclass
 class Candle:
     timestamp: str
@@ -383,8 +387,14 @@ def fetch_timeframe_candles(provider_symbol: str) -> dict[str, list[Candle]]:
     }
 
 
-def scan_symbol(symbol: str, meta: dict[str, Any], strategy: dict[str, Any], provider_map: dict[str, str]) -> dict[str, Any]:
-    scan_time = datetime.now(timezone.utc).isoformat()
+def scan_symbol(
+    symbol: str,
+    meta: dict[str, Any],
+    strategy: dict[str, Any],
+    provider_map: dict[str, str],
+    run_timestamp: str | None = None,
+) -> dict[str, Any]:
+    scan_time = run_timestamp or datetime.now(timezone.utc).isoformat()
     key_value = float(strategy.get("key_value", 2))
     atr_period = int(strategy.get("atr_period", 6))
     lookbacks = strategy.get("lookback_candles", {"monthly": 6, "weekly": 24})
@@ -404,8 +414,8 @@ def scan_symbol(symbol: str, meta: dict[str, Any], strategy: dict[str, Any], pro
     for timeframe in ["weekly", "monthly"]:
         try:
             candles = candles_by_timeframe.get(timeframe, [])
-            if not candles and fetch_error:
-                raise RuntimeError(fetch_error)
+            if not candles:
+                raise RuntimeError(fetch_error or f"No {timeframe} candles returned")
             tf_data = ut_bot_alerts(candles, key_value, atr_period, int(lookbacks.get(timeframe, 3)))
             signal = state_from_tf(tf_data)
             candles_ago, signal_price = signal_metrics(signal, tf_data)
@@ -451,6 +461,46 @@ def scan_symbol(symbol: str, meta: dict[str, Any], strategy: dict[str, Any], pro
     }
 
 
+def validate_scan_results(
+    rows: list[dict[str, Any]],
+    expected_count: int,
+    max_failure_rate: float = 0.05,
+) -> dict[str, int | float]:
+    symbols = [str(row.get("symbol", "")).strip().upper() for row in rows]
+    unique_symbols = {symbol for symbol in symbols if symbol}
+
+    if len(rows) != expected_count or len(unique_symbols) != expected_count:
+        raise ScanValidationError(
+            f"scan must contain {expected_count} unique symbols; "
+            f"received rows={len(rows)} unique_symbols={len(unique_symbols)}"
+        )
+
+    failed_symbol_count = 0
+    for row in rows:
+        weekly = row.get("weekly")
+        monthly = row.get("monthly")
+        if not isinstance(weekly, dict) or not isinstance(monthly, dict):
+            raise ScanValidationError(
+                f"symbol {row.get('symbol', '<unknown>')} must contain weekly and monthly results"
+            )
+        if weekly.get("error") or monthly.get("error"):
+            failed_symbol_count += 1
+
+    failure_rate = failed_symbol_count / expected_count if expected_count else 0.0
+    if failure_rate > max_failure_rate:
+        raise ScanValidationError(
+            f"scan failure rate {failure_rate:.2%} exceeds allowed {max_failure_rate:.2%} "
+            f"({failed_symbol_count}/{expected_count} symbols)"
+        )
+
+    return {
+        "symbol_count": len(unique_symbols),
+        "failed_symbol_count": failed_symbol_count,
+        "failure_rate": failure_rate,
+        "timeframe_row_count": len(rows) * 2,
+    }
+
+
 def write_snapshot(rows: list[dict[str, Any]]) -> None:
     payload = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -464,17 +514,17 @@ def write_snapshot(rows: list[dict[str, Any]]) -> None:
     temp.replace(path)
 
 
-def seed_database(rows: list[dict[str, Any]]) -> None:
+def seed_database(rows: list[dict[str, Any]], expected_count: int) -> None:
+    summary = validate_scan_results(rows, expected_count=expected_count)
     load_dotenv_file()
     database_url = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
     if not database_url:
-        return
+        raise RuntimeError("DATABASE_URL or POSTGRES_URL is required with --seed-db")
 
     try:
         import psycopg
-    except ImportError:
-        print("psycopg is not installed; skipped database seed")
-        return
+    except ImportError as exc:
+        raise RuntimeError("psycopg is required with --seed-db") from exc
 
     create_sql = """
     create table if not exists signal_snapshots (
@@ -493,6 +543,8 @@ def seed_database(rows: list[dict[str, Any]]) -> None:
     );
     create index if not exists idx_signal_snapshots_symbol_tf_time
       on signal_snapshots(symbol, timeframe, scanned_at desc);
+    create index if not exists idx_signal_snapshots_scanned_at
+      on signal_snapshots(scanned_at desc);
     """
     upsert_sql = """
     insert into signal_snapshots
@@ -507,28 +559,56 @@ def seed_database(rows: list[dict[str, Any]]) -> None:
       candles_ago = excluded.candles_ago;
     """
 
+    values: list[tuple[Any, ...]] = []
+    run_timestamps: set[str] = set()
+    for row in rows:
+        for timeframe in ["weekly", "monthly"]:
+            signal = row[timeframe]
+            run_timestamps.add(signal["scannedAt"])
+            values.append(
+                (
+                    row["symbol"],
+                    row["symbolName"],
+                    row["market"],
+                    timeframe,
+                    signal["signal"],
+                    signal["currentPrice"],
+                    signal["signalPrice"],
+                    signal["candlesAgo"],
+                    signal["scannedAt"],
+                )
+            )
+
+    if len(run_timestamps) != 1:
+        raise ScanValidationError(
+            f"atomic publication requires one shared timestamp; received {len(run_timestamps)}"
+        )
+    run_timestamp = next(iter(run_timestamps))
+
     with psycopg.connect(database_url) as connection:
         with connection.cursor() as cursor:
             cursor.execute(create_sql)
-            for row in rows:
-                for timeframe in ["weekly", "monthly"]:
-                    signal = row[timeframe]
-                    cursor.execute(
-                        upsert_sql,
-                        (
-                            row["symbol"],
-                            row["symbolName"],
-                            row["market"],
-                            timeframe,
-                            signal["signal"],
-                            signal["currentPrice"],
-                            signal["signalPrice"],
-                            signal["candlesAgo"],
-                            signal["scannedAt"],
-                        ),
-                    )
+            cursor.executemany(upsert_sql, values)
+            cursor.execute(
+                """
+                select count(*)::integer, count(distinct symbol)::integer
+                from signal_snapshots
+                where scanned_at = %s
+                """,
+                (run_timestamp,),
+            )
+            timeframe_rows, distinct_symbols = cursor.fetchone()
+            if timeframe_rows != summary["timeframe_row_count"] or distinct_symbols != expected_count:
+                raise ScanValidationError(
+                    "database verification failed before commit: "
+                    f"timeframe_rows={timeframe_rows} distinct_symbols={distinct_symbols}"
+                )
         connection.commit()
-    print(f"seeded {len(rows) * 2} timeframe rows into Neon/Postgres")
+    print(
+        "seeded "
+        f"{summary['timeframe_row_count']} timeframe rows for {summary['symbol_count']} symbols "
+        f"at {run_timestamp}"
+    )
 
 
 def main() -> None:
@@ -549,8 +629,12 @@ def main() -> None:
 
     rows: list[dict[str, Any]] = []
     started = time.time()
+    run_timestamp = datetime.now(timezone.utc).isoformat()
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
-        futures = {executor.submit(scan_symbol, symbol, meta, strategy, provider_map): symbol for symbol in symbols}
+        futures = {
+            executor.submit(scan_symbol, symbol, meta, strategy, provider_map, run_timestamp): symbol
+            for symbol in symbols
+        }
         for index, future in enumerate(as_completed(futures), start=1):
             rows.append(future.result())
             if index % max(1, args.checkpoint) == 0 or index == len(symbols):
@@ -559,15 +643,16 @@ def main() -> None:
                 print(f"scanned={index}/{len(symbols)} elapsed={time.time() - started:.1f}s")
 
     rows.sort(key=lambda row: (row["status"] != "Aligned BUY", row["ticker"]))
+    summary = validate_scan_results(rows, expected_count=len(symbols))
     write_snapshot(rows)
     if args.seed_db:
-        seed_database(rows)
+        seed_database(rows, expected_count=len(symbols))
 
     counts = {
         status: sum(1 for row in rows if row["status"] == status)
         for status in ["Aligned BUY", "Weekly BUY, Monthly Neutral", "Conflict", "Avoid"]
     }
-    print(f"updated alignment snapshot: {counts}")
+    print(f"updated alignment snapshot: {counts} quality={summary}")
 
 
 if __name__ == "__main__":
