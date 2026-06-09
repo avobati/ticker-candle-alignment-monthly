@@ -1,4 +1,42 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Ticker Candle Alignment Monthly
+
+This Next.js dashboard compares weekly and monthly UT Bot signals for the full
+ticker universe. Production data is stored in Neon and served by Vercel.
+
+## Automatic Refresh
+
+The `Daily signal refresh` GitHub Actions workflow runs every day at
+`01:07 UTC`:
+
+- `11:07 AEST` during Sydney winter
+- `12:07 AEDT` during Sydney daylight saving
+
+That is approximately one hour after the `00:00 UTC` daily candle boundary.
+The schedule runs on GitHub-hosted infrastructure, so it does not depend on a
+user laptop or Codex credits.
+
+The workflow scans all 11,054 symbols, rejects incomplete scans or provider
+failure rates above 5%, and publishes all 22,108 weekly/monthly rows to Neon in
+one transaction. Failed refreshes leave the previous successful production run
+unchanged.
+
+The ongoing weekly candle is included in calculations. A signal occurring on
+that candle is reported as `candlesAgo = 0`.
+
+### Required Secret
+
+The GitHub repository must contain an Actions secret named `DATABASE_URL`.
+Never commit the connection string.
+
+### Manual Refresh
+
+Open the repository's **Actions** tab, select **Daily signal refresh**, and use
+**Run workflow**. The workflow verifies both Neon and the production Vercel API
+before reporting success.
+
+The workflow creates an empty `[skip ci]` maintenance commit on the first UTC
+day of each month. This prevents GitHub from disabling scheduled workflows
+after 60 days of inactivity in a public repository.
 
 ## Getting Started
 

@@ -50,4 +50,9 @@ await sql.query(`
     on signal_snapshots(signal, timeframe)
 `);
 
+await sql.query(`
+  create index if not exists idx_signal_snapshots_scanned_at
+    on signal_snapshots(scanned_at desc)
+`);
+
 console.log("Migration complete: signal_snapshots is ready for weekly/monthly signals.");

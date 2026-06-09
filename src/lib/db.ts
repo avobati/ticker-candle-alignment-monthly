@@ -3,6 +3,11 @@ import fallbackSnapshot from "../../data/latest_alignment.json" with { type: "js
 import symbolMeta from "../../data/symbol_meta.json" with { type: "json" };
 import universe from "../../data/universe.json" with { type: "json" };
 import { countAlignmentStats, dedupeTickerRows, filterTickerRows, latestGeneratedAt, sortTickerRows } from "@/lib/alignment-data";
+import {
+  datasetSourceFor,
+  expectedTimeframeRows,
+  type DatasetSource,
+} from "@/lib/db-run-selection";
 import { getAlignmentStatus, normalizeTicker, shortSymbol } from "@/lib/market";
 import type { Alignment, Signal, TickerRow } from "@/data/mock-data";
 
@@ -26,6 +31,12 @@ type DbSignalRow = {
   signal_price: number | string | null;
   candles_ago: number | null;
   scanned_at: string | Date | null;
+};
+
+type CompleteRunRow = {
+  scanned_at: string | Date;
+  symbol_count: number | string;
+  timeframe_row_count: number | string;
 };
 
 export type AlignmentQuery = {
@@ -169,30 +180,74 @@ function fallbackRows() {
 export async function getAlignmentRows(query: AlignmentQuery = {}) {
   let normalizedRows: TickerRow[];
   let generatedAt: string | null;
+  let datasetSource: DatasetSource;
 
   try {
-    const dbRows = (await sql`
-      SELECT DISTINCT ON (symbol, timeframe)
-        symbol,
-        symbol_name,
-        market,
-        timeframe,
-        signal,
-        price,
-        signal_price,
-        candles_ago,
-        scanned_at
-      FROM signal_snapshots
-      WHERE timeframe IN ('weekly', 'monthly')
-      ORDER BY symbol, timeframe, scanned_at DESC, id DESC
-    `) as DbSignalRow[];
+    const expectedSymbols = universeSymbols.length;
+    const expectedRows = expectedTimeframeRows(expectedSymbols);
+    const completeRuns = (await sql`
+      WITH recent_timestamps AS (
+        SELECT DISTINCT scanned_at
+        FROM signal_snapshots
+        ORDER BY scanned_at DESC
+        LIMIT 100
+      )
+      SELECT
+        snapshots.scanned_at,
+        count(distinct snapshots.symbol)::integer AS symbol_count,
+        count(*)::integer AS timeframe_row_count
+      FROM signal_snapshots AS snapshots
+      INNER JOIN recent_timestamps
+        ON recent_timestamps.scanned_at = snapshots.scanned_at
+      WHERE snapshots.timeframe IN ('weekly', 'monthly')
+      GROUP BY snapshots.scanned_at
+      HAVING count(distinct snapshots.symbol) = ${expectedSymbols}
+        AND count(*) = ${expectedRows}
+      ORDER BY snapshots.scanned_at DESC
+      LIMIT 1
+    `) as CompleteRunRow[];
+    const completeRun = completeRuns[0] ?? null;
+    const dbRows = completeRun
+      ? ((await sql`
+          SELECT
+            symbol,
+            symbol_name,
+            market,
+            timeframe,
+            signal,
+            price,
+            signal_price,
+            candles_ago,
+            scanned_at
+          FROM signal_snapshots
+          WHERE timeframe IN ('weekly', 'monthly')
+            AND scanned_at = ${completeRun.scanned_at}
+          ORDER BY symbol, timeframe
+        `) as DbSignalRow[])
+      : ((await sql`
+          SELECT DISTINCT ON (symbol, timeframe)
+            symbol,
+            symbol_name,
+            market,
+            timeframe,
+            signal,
+            price,
+            signal_price,
+            candles_ago,
+            scanned_at
+          FROM signal_snapshots
+          WHERE timeframe IN ('weekly', 'monthly')
+          ORDER BY symbol, timeframe, scanned_at DESC, id DESC
+        `) as DbSignalRow[]);
 
     normalizedRows = normalizeDbRows(dbRows);
-    generatedAt = latestGeneratedAt(normalizedRows);
+    generatedAt = completeRun ? toIso(completeRun.scanned_at) : latestGeneratedAt(normalizedRows);
+    datasetSource = datasetSourceFor({ completeRunFound: Boolean(completeRun), fallbackUsed: false });
   } catch {
     const fallback = fallbackRows();
     normalizedRows = fallback.rows;
     generatedAt = fallback.generatedAt;
+    datasetSource = datasetSourceFor({ completeRunFound: false, fallbackUsed: true });
   }
 
   const filteredRows = filterTickerRows(normalizedRows, {
@@ -212,5 +267,6 @@ export async function getAlignmentRows(query: AlignmentQuery = {}) {
     total: filteredRows.length,
     stats: countAlignmentStats(filteredRows),
     generatedAt,
+    datasetSource,
   };
 }

@@ -1,0 +1,92 @@
+name: Daily signal refresh
+
+on:
+  schedule:
+    - cron: "7 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-signal-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      EXPECTED_SYMBOLS: "11054"
+      PRODUCTION_DATA_URL: https://ticker-candle-alignment-monthly.vercel.app/api/data?limit=1
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install database driver
+        run: python -m pip install --disable-pip-version-check "psycopg[binary]>=3.2,<4"
+
+      - name: Run scanner tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Scan all symbols and publish atomically
+        run: python scripts/scan_signals.py --workers 12 --checkpoint 250 --seed-db
+
+      - name: Verify Neon refresh
+        run: python scripts/verify_refresh.py --expected-symbols "$EXPECTED_SYMBOLS" --max-age-hours 6
+
+      - name: Verify production endpoint
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from datetime import datetime, timedelta, timezone
+
+          request = urllib.request.Request(
+              os.environ["PRODUCTION_DATA_URL"],
+              headers={"User-Agent": "ticker-candle-alignment-monthly-refresh/1.0"},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+
+          if payload.get("datasetSource") != "database-coherent":
+              raise SystemExit(f"unexpected dataset source: {payload.get('datasetSource')}")
+
+          generated_at = payload.get("generatedAt")
+          if not generated_at:
+              raise SystemExit("production endpoint did not report generatedAt")
+          generated = datetime.fromisoformat(generated_at.replace("Z", "+00:00")).astimezone(timezone.utc)
+          if datetime.now(timezone.utc) - generated > timedelta(hours=6):
+              raise SystemExit(f"production endpoint is stale: {generated.isoformat()}")
+
+          print(
+              json.dumps(
+                  {
+                      "datasetSource": payload["datasetSource"],
+                      "generatedAt": generated.isoformat(),
+                      "reportedTotal": payload.get("stats", {}).get("total"),
+                  },
+                  sort_keys=True,
+              )
+          )
+          PY
+
+      - name: Keep public scheduled workflow active
+        if: github.event_name == 'schedule'
+        run: |
+          if [ "$(date -u +%d)" != "01" ]; then
+            echo "Monthly activity heartbeat is not due."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: keep daily refresh schedule active [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
